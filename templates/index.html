@@ -1,0 +1,1215 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SimSample</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Load React -->
+    <script
+      src="https://unpkg.com/react@18/umd/react.development.js"
+      crossorigin
+    ></script>
+    <script
+      src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"
+      crossorigin
+    ></script>
+
+    <!-- Load Babel for JSX transformation -->
+    <script src="https://unpkg.com/babel-standalone@6/babel.min.js"></script>
+
+    <style>
+      /* Custom audio player styles */
+      audio {
+        width: 100%;
+        margin: 10px 0;
+      }
+
+      body {
+        background: linear-gradient(to bottom right, #111827, #1f2937);
+        color: white;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          Helvetica, Arial, sans-serif;
+      }
+
+      .drag-over {
+        border-color: rgb(6, 182, 212) !important;
+        background-color: rgba(6, 182, 212, 0.1) !important;
+      }
+
+      /* Progress bar animations */
+      .progress-bar {
+        transition: width 0.3s ease-in-out;
+      }
+      
+      .pulse-glow {
+        animation: pulse-glow 2s ease-in-out infinite;
+      }
+      
+      @keyframes pulse-glow {
+        0%, 100% { box-shadow: 0 0 5px rgba(6, 182, 212, 0.5); }
+        50% { box-shadow: 0 0 20px rgba(6, 182, 212, 0.8); }
+      }
+    </style>
+  </head>
+  <body class="min-h-screen">
+
+
+
+    <div id="root" class="container mx-auto max-w-3xl p-4"></div>
+
+    <script type="text/babel">
+      const { useState, useEffect, useRef } = React;
+
+      function SpliceSampleFinder() {
+        // Library states
+        const [libraryStatus, setLibraryStatus] = useState({
+          library_built: false,
+          sample_count: 0,
+          has_upload: false,
+        });
+        const [libraryStage, setLibraryStage] = useState("upload");
+        const [uploadProgress, setUploadProgress] = useState(0);
+        const [processingProgress, setProcessingProgress] = useState(0);
+        const [libraryStats, setLibraryStats] = useState(null);
+        const [sessionReady, setSessionReady] = useState(false);
+        const [sessionInitializing, setSessionInitializing] = useState(true);
+        // Upload state
+        const [uploadState, setUploadState] = useState({
+          phase: 'idle', // 'idle', 'chunking', 'uploading', 'processing', 'complete'
+          currentChunk: 0,
+          totalChunks: 0,
+          totalFiles: 0,
+          processedFiles: 0,
+          message: ''
+        });
+
+        // Original states
+        const [isUploading, setIsUploading] = useState(false);
+        const [uploadedSample, setUploadedSample] = useState(null);
+        const [matches, setMatches] = useState(null);
+        const [error, setError] = useState(null);
+        const [openDropdown, setOpenDropdown] = useState(null);
+        const [refreshMessage, setRefreshMessage] = useState(null);
+
+        // Refs
+        const libraryUploadRef = useRef(null);
+        const addMoreRef = useRef(null);
+
+        const [addingMore, setAddingMore] = useState(false);
+        useEffect(() => {
+          initializeSession();
+        }, []);
+
+        const initializeSession = async () => {
+          console.log("🔄 Initializing session...");
+          setSessionInitializing(true);
+
+          let attempts = 0;
+          const maxAttempts = 5;
+
+          while (attempts < maxAttempts) {
+            try {
+              attempts++;
+              console.log(`🔄 Session init attempt ${attempts}/${maxAttempts}`);
+
+              // Try to warm up the session
+              const warmupResponse = await fetch("/api/warmup", {
+                method: "GET",
+              });
+
+              if (warmupResponse.ok) {
+                const warmupResult = await warmupResponse.json();
+                console.log("✅ Session initialized:", warmupResult);
+                setSessionReady(true);
+                setSessionInitializing(false);
+
+                // Also check library status now that session is ready
+                await checkLibraryStatus();
+                return;
+              } else {
+                throw new Error(`Warmup failed: ${warmupResponse.status}`);
+              }
+
+            } catch (error) {
+              console.log(`❌ Session init attempt ${attempts} failed:`, error);
+
+              if (attempts < maxAttempts) {
+                // Wait before retrying (exponential backoff)
+                const delay = Math.min(1000 * Math.pow(2, attempts), 5000);
+                console.log(`⏳ Retrying in ${delay}ms...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+              }
+            }
+          }
+
+          // If all attempts failed, still allow the user to try
+          console.log("⚠️ Session initialization failed after all attempts, but continuing...");
+          setSessionReady(true);
+          setSessionInitializing(false);
+        };
+
+        // Enhanced API call wrapper that handles session issues
+        const apiCall = async (url, options = {}) => {
+          let attempts = 0;
+          const maxAttempts = 3;
+
+          while (attempts < maxAttempts) {
+            try {
+              attempts++;
+              const response = await fetch(url, options);
+
+              // If successful, return response
+              if (response.ok) {
+                return response;
+              }
+
+              // If 503 or 500, might be session issue - retry
+              if (response.status === 503 || response.status === 500) {
+                console.log(`🔄 API call failed (${response.status}), retrying...`);
+
+                if (attempts < maxAttempts) {
+                  // Quick session re-init
+                  await fetch("/api/warmup");
+                  await new Promise(resolve => setTimeout(resolve, 1000));
+                  continue;
+                }
+              }
+
+              // If other error, don't retry
+              throw new Error(`API call failed: ${response.status}`);
+
+            } catch (error) {
+              if (attempts >= maxAttempts) {
+                throw error;
+              }
+              console.log(`🔄 Retrying API call, attempt ${attempts + 1}...`);
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+          }
+        };
+
+
+
+        // Check library status on load
+        useEffect(() => {
+          checkLibraryStatus();
+        }, []);
+
+        useEffect(() => {
+          if (libraryStatus.library_built) {
+            fetchLibraryStats();
+          }
+        }, [libraryStatus.library_built]);
+
+        // Close dropdown when clicking outside
+        useEffect(() => {
+          const handleClickOutside = (event) => {
+            if (openDropdown !== null && !event.target.closest(".relative")) {
+              setOpenDropdown(null);
+            }
+          };
+
+          document.addEventListener("mousedown", handleClickOutside);
+          return () =>
+            document.removeEventListener("mousedown", handleClickOutside);
+        }, [openDropdown]);
+
+        const checkLibraryStatus = async () => {
+          try {
+            const response = await apiCall("/api/library-status");
+            const status = await response.json();
+            setLibraryStatus(status);
+
+            if (status.library_built) {
+              setLibraryStage("ready");
+            } else if (status.has_upload) {
+              setLibraryStage("processing");
+            } else {
+              setLibraryStage("upload");
+            }
+          } catch (error) {
+            console.error("Error checking library status:", error);
+          }
+        };
+
+        const fetchLibraryStats = async () => {
+          try {
+            const response = await fetch("/api/library-stats");
+            if (response.ok) {
+              const stats = await response.json();
+              setLibraryStats(stats);
+            }
+          } catch (error) {
+            console.error("Error fetching library stats:", error);
+          }
+        };
+
+        // Helper to chunk files by size (25MB max per chunk)
+        const chunkFilesBySize = (files, maxSizeBytes = 25 * 1024 * 1024) => {
+          const chunks = [];
+          let currentChunk = [];
+          let currentSize = 0;
+          
+          Array.from(files).forEach(file => {
+            // Audio files only
+            const ext = file.name.toLowerCase().split('.').pop();
+            if (!['wav', 'mp3', 'flac', 'aiff', 'ogg', 'm4a'].includes(ext)) {
+              return;
+            }
+            
+            // If adding this file would exceed the limit, start a new chunk
+            if (currentSize + file.size > maxSizeBytes && currentChunk.length > 0) {
+              chunks.push(currentChunk);
+              currentChunk = [file];
+              currentSize = file.size;
+            } else {
+              currentChunk.push(file);
+              currentSize += file.size;
+            }
+          });
+          
+          // Add the last chunk if it has files
+          if (currentChunk.length > 0) {
+            chunks.push(currentChunk);
+          }
+          
+          return chunks;
+        };
+
+        // Replace your handleLibraryUpload function and add these new processing functions:
+
+  const handleLibraryUpload = async (files, isZip = false) => {
+    if (!files || files.length === 0) return;
+
+    setError(null);
+    setUploadProgress(0);
+    setProcessingProgress(0);
+    setLibraryStage("processing");
+
+    try {
+      // Upload phase (same as before)
+      if (isZip) {
+        const formData = new FormData();
+        formData.append("folder_zip", files[0]);
+
+        setUploadState({
+          phase: 'uploading',
+          message: 'Uploading ZIP file...',
+          currentChunk: 1,
+          totalChunks: 1,
+          totalFiles: 1,
+          processedFiles: 0
+        });
+
+        const uploadResponse = await fetch("/api/build-library", {
+          method: "POST",
+          body: formData,
+        });
+
+        const uploadResult = await uploadResponse.json();
+        if (!uploadResponse.ok) {
+          throw new Error(uploadResult.error || "Upload failed");
+        }
+      } else {
+        // Handle chunked uploads (same as your existing code)
+        const audioFiles = Array.from(files).filter(file => {
+          const ext = file.name.toLowerCase().split('.').pop();
+          return ['wav', 'mp3', 'flac', 'aiff', 'ogg', 'm4a'].includes(ext);
+        });
+
+        const totalSize = audioFiles.reduce((sum, file) => sum + file.size, 0);
+        const totalSizeMB = (totalSize / (1024 * 1024)).toFixed(1);
+
+        setUploadState({
+          phase: 'chunking',
+          message: 'Preparing ' + audioFiles.length + ' files (' + totalSizeMB + 'MB)...',
+          totalFiles: audioFiles.length,
+          processedFiles: 0,
+          currentChunk: 0,
+          totalChunks: 0
+        });
+
+        if (totalSize <= 25 * 1024 * 1024) {
+          // Single chunk upload
+          setUploadState(prev => ({
+            ...prev,
+            phase: 'uploading',
+            message: 'Uploading files...',
+            totalChunks: 1,
+            currentChunk: 1
+          }));
+
+          const formData = new FormData();
+          audioFiles.forEach((file, index) => {
+            formData.append("folder_files", file);
+            if (file.webkitRelativePath) {
+              formData.append('path_' + index, file.webkitRelativePath);
+            }
+          });
+
+          const uploadResponse = await fetch("/api/build-library", {
+            method: "POST",
+            body: formData,
+          });
+
+          const uploadResult = await uploadResponse.json();
+          if (!uploadResponse.ok) {
+            throw new Error(uploadResult.error || "Upload failed");
+          }
+        } else {
+          // Multi-chunk upload (same as your existing code)
+          const chunks = chunkFilesBySize(audioFiles);
+
+          setUploadState(prev => ({
+            ...prev,
+            phase: 'uploading',
+            totalChunks: chunks.length,
+            currentChunk: 0
+          }));
+
+          for (let i = 0; i < chunks.length; i++) {
+            const chunk = chunks[i];
+            const chunkSizeMB = (chunk.reduce((sum, file) => sum + file.size, 0) / (1024 * 1024)).toFixed(1);
+
+            setUploadState(prev => ({
+              ...prev,
+              currentChunk: i + 1,
+              message: 'Uploading chunk ' + (i + 1) + '/' + chunks.length + ' (' + chunkSizeMB + 'MB, ' + chunk.length + ' files)'
+            }));
+
+            const formData = new FormData();
+            chunk.forEach((file, index) => {
+              formData.append("folder_files", file);
+              if (file.webkitRelativePath) {
+                formData.append('path_' + index, file.webkitRelativePath);
+              }
+            });
+
+            const uploadResponse = await fetch("/api/build-library", {
+              method: "POST",
+              body: formData,
+            });
+
+            const uploadResult = await uploadResponse.json();
+            if (!uploadResponse.ok) {
+              throw new Error('Chunk ' + (i + 1) + ' failed: ' + (uploadResult.error || "Upload failed"));
+            }
+
+            const progress = ((i + 1) / chunks.length) * 100;
+            setUploadProgress(progress);
+          }
+        }
+      }
+
+      // Now start the CHUNKED PROCESSING phase
+      console.log("✅ Upload complete! Starting chunked processing...");
+      await startChunkedProcessing();
+
+    } catch (error) {
+      console.error("Upload error:", error);
+      setError(error.message);
+      setLibraryStage("upload");
+      setUploadProgress(0);
+      setProcessingProgress(0);
+      setUploadState({ phase: 'idle', message: '', currentChunk: 0, totalChunks: 0 });
+    }
+  };
+
+const startChunkedProcessing = async () => {
+  try {
+    // Step 1: Initialize processing
+    setUploadState({
+      phase: 'processing',
+      message: 'Initializing audio processing...',
+      currentChunk: 0,
+      totalChunks: 0
+    });
+
+    const initResponse = await fetch("/api/start-processing", {
+      method: "POST",
+    });
+
+    const initResult = await initResponse.json();
+    if (!initResponse.ok) {
+      throw new Error(initResult.error || "Failed to start processing");
+    }
+
+    const { total_files, total_batches, batch_size } = initResult;
+    console.log(`🚀 Processing ${total_files} files in ${total_batches} batches`);
+
+    // Step 2: Process each batch
+
+    for (let batch = 0; batch < total_batches; batch++) {
+      setUploadState({
+        phase: 'processing',
+        message: `Processing batch ${batch + 1}/${total_batches} (${batch_size} files per batch)...`,
+        currentChunk: batch + 1,
+        totalChunks: total_batches
+      });
+
+      console.log(`🔄 Processing batch ${batch + 1}/${total_batches}`);
+
+      // Replace the simple fetch with retry logic
+      let batchResult;
+      let success = false;
+
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          const batchResponse = await fetch("/api/process-library-batch", {
+            method: "POST",
+          });
+
+          if (batchResponse.ok) {
+            batchResult = await batchResponse.json();
+            success = true;
+            break;
+          }
+
+          if (batchResponse.status === 503 && attempt < 3) {
+            console.log(`🔄 Batch ${batch + 1} attempt ${attempt} failed (503), retrying...`);
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            continue;
+          }
+
+          const errorResult = await batchResponse.json();
+          throw new Error(`Batch ${batch + 1} failed: ${errorResult.error}`);
+        } catch (error) {
+          if (attempt === 3) throw error;
+          console.log(`🔄 Batch ${batch + 1} attempt ${attempt} failed, retrying...`);
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      }
+
+      if (!success) {
+        throw new Error(`Batch ${batch + 1} failed after 3 attempts`);
+      }
+
+      // Update progress
+      const progress = batchResult.progress_percent || 0;
+      setProcessingProgress(progress);
+
+      console.log(`✅ Batch ${batch + 1} complete: ${batchResult.successful_files} files processed`);
+    }
+
+    // Step 3: Finalize library
+    setUploadState({
+      phase: 'processing',
+      message: 'Building search index and finalizing library...',
+      currentChunk: total_batches,
+      totalChunks: total_batches
+    });
+
+    console.log("🔍 Finalizing library...");
+
+    const finalizeResponse = await fetch("/api/finalize-library", {
+      method: "POST",
+    });
+
+    const finalizeResult = await finalizeResponse.json();
+    if (!finalizeResponse.ok) {
+      throw new Error(finalizeResult.error || "Failed to finalize library");
+    }
+
+    // Success!
+    const sampleCount = finalizeResult.sample_count;
+    setUploadState({
+      phase: 'complete',
+      message: `Library ready with ${sampleCount} samples!`,
+      currentChunk: total_batches,
+      totalChunks: total_batches
+    });
+
+    setLibraryStage("ready");
+    await checkLibraryStatus();
+    await fetchLibraryStats();
+    setUploadProgress(100);
+    setProcessingProgress(100);
+
+    console.log(`🎉 Processing complete! Library has ${sampleCount} samples`);
+
+  } catch (error) {
+    console.error("Processing error:", error);
+    setError(error.message);
+    setLibraryStage("upload");
+    setUploadProgress(0);
+    setProcessingProgress(0);
+    setUploadState({ phase: 'idle', message: '', currentChunk: 0, totalChunks: 0 });
+  }
+};
+
+        const clearLibrary = async () => {
+          try {
+            await fetch("/api/clear-library", { method: "POST" });
+            setLibraryStage("upload");
+            setLibraryStatus({
+              library_built: false,
+              sample_count: 0,
+              has_upload: false,
+            });
+            setLibraryStats(null);
+            setMatches(null);
+            setUploadedSample(null);
+            setError(null);
+            setUploadProgress(0);
+            setProcessingProgress(0);
+            setUploadState({ phase: 'idle', message: '', currentChunk: 0, totalChunks: 0 });
+          } catch (error) {
+            setError("Failed to clear library");
+          }
+        };
+
+        // Drag and drop handlers
+        const handleDragOver = (e) => {
+          e.preventDefault();
+          e.currentTarget.classList.add("drag-over");
+        };
+
+        const handleDragLeave = (e) => {
+          e.preventDefault();
+          e.currentTarget.classList.remove("drag-over");
+        };
+
+        const handleLibraryDrop = (e) => {
+          e.preventDefault();
+          e.currentTarget.classList.remove("drag-over");
+
+          const files = e.dataTransfer.files;
+          if (files.length > 0) {
+            handleLibraryUpload(files);
+          }
+        };
+
+        const handleAddMoreDrop = async (e) => {
+          e.preventDefault();
+          e.currentTarget.classList.remove("drag-over");
+
+          const files = e.dataTransfer.files;
+          if (files.length > 0) {
+            await handleLibraryUpload(files);
+            setAddingMore(false);
+          }
+        };
+
+        const handleAddMoreChange = async (e) => {
+          if (e.target.files.length > 0) {
+            await handleLibraryUpload(e.target.files);
+            setAddingMore(false);
+          }
+        };
+
+        const handleSampleDrop = (e) => {
+          e.preventDefault();
+          e.currentTarget.classList.remove("drag-over");
+
+          const files = e.dataTransfer.files;
+          if (files.length > 0) {
+            const file = files[0];
+            setUploadedSample({
+              file: file,
+              name: file.name,
+              url: URL.createObjectURL(file),
+            });
+          }
+        };
+
+        const handleDownload = (match) => {
+          const link = document.createElement("a");
+          link.href = match.url;
+          link.download = match.filename;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+        };
+
+        const handleCopyLink = (match) => {
+          const fullUrl = window.location.origin + match.url;
+          navigator.clipboard.writeText(fullUrl).then(() => {
+            console.log("Link copied to clipboard!");
+          });
+        };
+
+
+
+        // File selection handler
+        const handleFileChange = (e) => {
+          if (e.target.files.length > 0) {
+            const file = e.target.files[0];
+            setUploadedSample({
+              file: file,
+              name: file.name,
+              url: URL.createObjectURL(file),
+            });
+          }
+        };
+
+        // Form submission handler
+        const handleSubmit = async () => {
+          if (!uploadedSample) return;
+
+          if (!libraryStatus.library_built) {
+            setError("Please upload and build your sample library first");
+            return;
+          }
+
+          setIsUploading(true);
+          setError(null);
+
+          try {
+            const formData = new FormData();
+            formData.append("sample", uploadedSample.file);
+
+            const response = await fetch("/api/find-similar", {
+              method: "POST",
+              body: formData,
+            });
+
+            if (!response.ok) {
+              const errorData = await response.json();
+              throw new Error(
+                errorData.error || "Failed to process the audio sample"
+              );
+            }
+
+            const data = await response.json();
+
+            setUploadedSample({
+              ...uploadedSample,
+              url: data.uploadedUrl,
+            });
+
+            if (data.libraryRefreshed) {
+              setRefreshMessage("Library refreshed to include new samples");
+              setTimeout(() => setRefreshMessage(null), 3000);
+              checkLibraryStatus();
+            }
+
+            setMatches(data.matches);
+          } catch (err) {
+            setError(
+              err.message || "An error occurred while processing your request"
+            );
+            console.error(err);
+          } finally {
+            setIsUploading(false);
+          }
+        };
+
+        // Helper functions for rendering
+        const getProgressBarClass = () => {
+          let baseClass = "bg-gradient-to-r from-cyan-500 to-blue-500 h-3 rounded-full progress-bar";
+          if (uploadState.phase === 'uploading') {
+            baseClass += " pulse-glow";
+          }
+          return baseClass;
+        };
+
+        const getProgressBarStyle = () => {
+          return {width: uploadProgress + '%'};
+        };
+
+        const renderChunkInfo = () => {
+          if (uploadState.totalChunks > 0) {
+            return React.createElement('span', {className: "text-sm text-cyan-400"}, 
+              uploadState.currentChunk + '/' + uploadState.totalChunks
+            );
+          }
+          return null;
+        };
+
+
+        if (sessionInitializing) {
+          return (
+            <div className="py-8 text-center">
+              <header className="mb-12">
+                <h1 className="text-4xl font-bold mb-2 bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-purple-500">
+                  SimSample
+                </h1>
+                <p className="text-gray-400">
+                  Upload your sample library and find similar sounds instantly
+                </p>
+              </header>
+
+              <div className="p-6 bg-gray-800/50 rounded-xl border border-gray-700 max-w-md mx-auto">
+                <div className="flex items-center justify-center mb-4">
+                  <svg className="animate-spin h-8 w-8 text-cyan-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                </div>
+                <h2 className="text-xl font-semibold mb-2">Initializing...</h2>
+                <p className="text-gray-400 text-sm">Setting up your session</p>
+              </div>
+            </div>
+          );
+        }
+        return (
+          <div className="py-8">
+            <header className="mb-12 text-center">
+              <h1 className="text-4xl font-bold mb-2 bg-clip-text text-transparent bg-gradient-to-r from-cyan-400 to-purple-500">
+                SimSample
+              </h1>
+              <p className="text-gray-400">
+               Improve your producing workflow.
+              </p>
+            </header>
+
+            {error && (
+              <div className="p-6 mb-6 bg-red-900/30 rounded-xl border border-red-800">
+                <p className="text-red-300">{error}</p>
+              </div>
+            )}
+            {refreshMessage && (
+              <div className="p-4 mb-6 bg-green-900/40 rounded-xl border border-green-700 text-green-300 text-center text-sm">
+                {refreshMessage}
+              </div>
+            )}
+
+            {/* Library Management Section */}
+            <div className="mb-10 p-6 bg-gray-800/50 rounded-xl border border-gray-700">
+              <h2 className="text-xl font-semibold mb-4">
+                📁 Your Sample Library
+              </h2>
+
+              {libraryStage === "upload" && (
+                <div>
+                  <p className="text-gray-300 mb-4">
+                    Upload your sample folder to get started:
+                  </p>
+                  <div
+                    className="border-2 border-dashed border-gray-600 rounded-lg p-6 text-center hover:border-cyan-400 transition-colors cursor-pointer mb-4"
+                    onClick={() =>
+                      libraryUploadRef.current &&
+                      libraryUploadRef.current.click()
+                    }
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleLibraryDrop}
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="h-10 w-10 mb-2 mx-auto text-gray-500"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z"
+                      />
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M8 5a2 2 0 012-2h4a2 2 0 012 2v2H8V5z"
+                      />
+                    </svg>
+                    <p className="text-gray-300 text-lg mb-2">
+                      Drag & drop your sample folder here
+                    </p>
+                    <p className="text-gray-500 text-sm">
+                      May take a few minutes, please be patient.
+                    </p>
+                    <input
+                      ref={libraryUploadRef}
+                      type="file"
+                      webkitdirectory=""
+                      multiple
+                      className="hidden"
+                      onChange={(e) => handleLibraryUpload(e.target.files)}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {libraryStage === "processing" && (
+                <div className="text-center">
+                  <h3 className="text-xl mb-4">⚙️ Building Your Library...</h3>
+                  
+                  {/* Upload Progress */}
+                  {uploadState.phase !== 'idle' && (
+                    <div className="mb-6">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm text-gray-400">
+                          {uploadState.message}
+                        </span>
+                        {renderChunkInfo()}
+                      </div>
+                      
+                      {/* Progress bar */}
+                      <div className="w-full bg-gray-700 rounded-full h-3 mb-2">
+                        <div 
+                          className={getProgressBarClass()}
+                          style={getProgressBarStyle()}
+                        ></div>
+                      </div>
+                      
+                      {/* Processing details */}
+                      {uploadState.phase === 'processing' && (
+                        <div className="mt-4 text-sm text-gray-400">
+                          <p>🎵 Analyzing audio features and building search index...</p>
+                          <p>This may take a few minutes </p>
+                        </div>
+                      )}
+                      
+
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {libraryStage === "ready" && (
+                <div className="text-center">
+                  <h3 className="text-xl mb-2">✅ Library Ready!</h3>
+                  <p className="text-gray-400 mb-4">
+                    {libraryStatus.sample_count} samples indexed and ready for
+                    search
+                  </p>
+                  {libraryStats && (
+                    <div className="text-left mb-4 text-sm text-gray-300">
+                      <p className="font-semibold">Library Stats:</p>
+                      <p className="mt-2">By Type:</p>
+                      <ul className="list-disc list-inside">
+                        {Object.entries(libraryStats.types).map(
+                          ([type, count]) => (
+                            <li key={type}>
+                              {type}: {count}
+                            </li>
+                          )
+                        )}
+                      </ul>
+
+                    </div>
+                  )}
+                  <div className="flex justify-center gap-4">
+                    <button
+                      onClick={() => setAddingMore(true)}
+                      className="px-4 py-2 bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg transition-colors"
+                    >
+                      ➕ Add More Samples
+                    </button>
+                    <button
+                      onClick={clearLibrary}
+                      className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors"
+                    >
+                      🗑️ Clear Library
+                    </button>
+                  </div>
+
+                  {addingMore && (
+                    <div className="mt-6">
+                      <div
+                        className="border-2 border-dashed border-gray-600 rounded-lg p-6 text-center hover:border-cyan-400 transition-colors cursor-pointer mb-4"
+                        onClick={() =>
+                          addMoreRef.current && addMoreRef.current.click()
+                        }
+                        onDragOver={handleDragOver}
+                        onDragLeave={handleDragLeave}
+                        onDrop={handleAddMoreDrop}
+                      >
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          className="h-10 w-10 mb-2 mx-auto text-gray-500"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2-2z"
+                          />
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M8 5a2 2 0 012-2h4a2 2 0 012 2v2H8V5z"
+                          />
+                        </svg>
+                        <p className="text-gray-300 text-lg mb-2">
+                          Drag & drop more folders here
+                        </p>
+                        <p className="text-gray-500 text-sm">
+                          Any size supported • Automatic chunking
+                        </p>
+                        <input
+                          ref={addMoreRef}
+                          type="file"
+                          webkitdirectory=""
+                          multiple
+                          className="hidden"
+                          onChange={handleAddMoreChange}
+                        />
+                      </div>
+                      <button
+                        onClick={() => setAddingMore(false)}
+                        className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
+                      >
+                        Done
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Sample Search Section - Only show when library is ready */}
+            {libraryStatus.library_built && (
+              <div className="mb-10 p-6 bg-gray-800/50 rounded-xl border border-gray-700">
+                <div className="flex flex-col items-center justify-center">
+                  <label
+                    htmlFor="sample-upload"
+                    className="w-full h-32 border-2 border-dashed border-gray-600 rounded-lg flex flex-col items-center justify-center cursor-pointer hover:border-cyan-400 transition-colors"
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleSampleDrop}
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="h-10 w-10 mb-2 text-gray-500"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+                      />
+                    </svg>
+                    <span className="text-gray-400">
+                      {uploadedSample
+                        ? uploadedSample.name
+                        : "Choose an audio file or drag & drop here"}
+                    </span>
+                    <input
+                      type="file"
+                      id="sample-upload"
+                      name="sample"
+                      accept="audio/*"
+                      className="hidden"
+                      onChange={handleFileChange}
+                    />
+                  </label>
+
+                  <button
+                    onClick={handleSubmit}
+                    disabled={isUploading || !uploadedSample}
+                    className={
+                      isUploading || !uploadedSample
+                        ? "mt-6 px-6 py-3 rounded-lg font-medium flex items-center bg-gray-700 text-gray-400 cursor-not-allowed"
+                        : "mt-6 px-6 py-3 rounded-lg font-medium flex items-center bg-gradient-to-r from-cyan-500 to-purple-600 text-white hover:shadow-lg transition-all"
+                    }
+                  >
+                    {isUploading ? (
+                      <div>
+                        <svg
+                          className="animate-spin -ml-1 mr-3 h-5 w-5 text-white"
+                          xmlns="http://www.w3.org/2000/svg"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                        >
+                          <circle
+                            className="opacity-25"
+                            cx="12"
+                            cy="12"
+                            r="10"
+                            stroke="currentColor"
+                            strokeWidth="4"
+                          ></circle>
+                          <path
+                            className="opacity-75"
+                            fill="currentColor"
+                            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                          ></path>
+                        </svg>
+                        Processing...
+                      </div>
+                    ) : (
+                      <div className="flex items-center">
+                        <svg
+                          className="mr-2 w-5 h-5"
+                          xmlns="http://www.w3.org/2000/svg"
+                          fill="none"
+                          viewBox="0 0 24 24"
+                          stroke="currentColor"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"
+                          />
+                        </svg>
+                        Find Similar Samples
+                      </div>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {uploadedSample && (
+              <div className="mb-10 p-6 bg-gray-800/50 rounded-xl border border-gray-700">
+                <h2 className="text-xl font-semibold mb-4 flex items-center">
+                  <svg
+                    className="mr-2 w-5 h-5 text-cyan-400"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"
+                    />
+                  </svg>
+                  Uploaded Sample
+                </h2>
+                <div className="p-4 bg-gray-800 rounded-lg">
+                  <p className="mb-2 text-gray-400">{uploadedSample.name}</p>
+                  <audio controls className="w-full" src={uploadedSample.url} />
+                </div>
+              </div>
+            )}
+
+            {matches && (
+              <div className="p-6 bg-gray-800/50 rounded-xl border border-gray-700">
+                <h2 className="text-xl font-semibold mb-4">
+                  Top Matches
+                  <span className="text-sm text-gray-400 font-normal ml-2">
+                    (click ⋯ for options)
+                  </span>
+                </h2>
+
+                {matches.length > 0 ? (
+                  <div className="space-y-4">
+                    {matches.map((match, index) => (
+                      <div
+                        key={index}
+                        className="p-4 bg-gray-800 rounded-lg hover:bg-gray-700 transition-colors relative"
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex-1">
+                            <span className="font-medium">
+                              {match.filename}
+                            </span>
+                            <div className="flex gap-2 mt-1">
+                              <span className="px-2 py-1 bg-cyan-600 text-white text-xs rounded">
+                                {match.type}
+                              </span>
+                              {match.bpm && (
+                                <span className="px-2 py-1 bg-green-600 text-white text-xs rounded">
+                                  {match.bpm} BPM
+                                </span>
+                              )}
+
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-3">
+                            <div className="relative">
+                              <button
+                                onClick={() =>
+                                  setOpenDropdown(
+                                    openDropdown === index ? null : index
+                                  )
+                                }
+                                className="p-2 hover:bg-gray-600 rounded-lg transition-colors text-gray-400 hover:text-white"
+                                title="More options"
+                              >
+                                <svg
+                                  className="w-5 h-5"
+                                  fill="currentColor"
+                                  viewBox="0 0 20 20"
+                                >
+                                  <path d="M10 6a2 2 0 110-4 2 2 0 010 4zM10 12a2 2 0 110-4 2 2 0 010 4zM10 18a2 2 0 110-4 2 2 0 010 4z" />
+                                </svg>
+                              </button>
+
+                              {openDropdown === index && (
+                                <div className="absolute right-0 top-full mt-1 bg-gray-700 rounded-lg shadow-lg border border-gray-600 py-1 min-w-48 z-10">
+                                  <button
+                                    onClick={() => {
+                                      handleDownload(match);
+                                      setOpenDropdown(null);
+                                    }}
+                                    className="w-full px-4 py-2 text-left hover:bg-gray-600 text-white flex items-center gap-2"
+                                  >
+                                    <svg
+                                      className="w-4 h-4"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      viewBox="0 0 24 24"
+                                    >
+                                      <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth={2}
+                                        d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                                      />
+                                    </svg>
+                                    Download Sample
+                                  </button>
+
+                                  <button
+                                    onClick={() => {
+                                      handleCopyLink(match);
+                                      setOpenDropdown(null);
+                                    }}
+                                    className="w-full px-4 py-2 text-left hover:bg-gray-600 text-white flex items-center gap-2"
+                                  >
+                                    <svg
+                                      className="w-4 h-4"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      viewBox="0 0 24 24"
+                                    >
+                                      <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth={2}
+                                        d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                                      />
+                                    </svg>
+                                    Copy Link
+                                  </button>
+
+
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        <audio
+                          controls
+                          preload="none"  // Don't load until user hits play
+                          src={match.url}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-center text-gray-400 py-6">
+                    No similar samples found.
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      // Mount React component
+      const root = ReactDOM.createRoot(document.getElementById("root"));
+      root.render(React.createElement(SpliceSampleFinder));
+    </script>
+  </body>
+</html>

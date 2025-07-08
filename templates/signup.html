@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sign Up</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white flex items-center justify-center h-screen">
+    <div class="w-full max-w-xs">
+        <h1 class="text-3xl font-bold text-center mb-6">Create Account</h1>
+        {% if error %}<p class="text-red-500 mb-2 text-center">{{ error }}</p>{% endif %}
+        <form method="post" class="bg-gray-800 shadow-md rounded px-8 pt-6 pb-8 mb-4">
+            <div class="mb-4">
+                <input class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700" name="username" type="text" placeholder="Username" required>
+            </div>
+            <div class="mb-6">
+                <input class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700" name="password" type="password" placeholder="Password" required>
+            </div>
+            <button class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded w-full" type="submit">Sign Up</button>
+        </form>
+        <a href="{{ url_for('login_google') }}" class="bg-white text-gray-900 hover:bg-gray-100 font-semibold py-2 px-4 rounded w-full flex items-center justify-center mb-2">
+            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" class="h-5 w-5 mr-2" alt="Google logo">
+            Sign up with Google
+        </a>
+        <p class="text-center">Already have an account? <a href="{{ url_for('login') }}" class="text-blue-400">Login</a></p>
+    </div>
+</body>
+</html>

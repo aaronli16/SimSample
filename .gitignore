@@ -1,0 +1,48 @@
+# Virtual Environment
+venv/
+venv_mac/
+venv_pc/
+env/
+.env
+.venv/
+ENV/
+
+# Ignore large fingerprint database
+fingerprint_db.pkl
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+.cache/
+.pytest_cache/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Audio files - uncomment if you don't want to track audio files
+# *.wav
+# *.mp3
+# audio_samples/
+
+# macOS specific
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# VS Code
+.vscode/
+
+# PyCharm
+.idea/
+
+# Large binary files
+*.dylib
+*.so
+*.dll
+users.json
