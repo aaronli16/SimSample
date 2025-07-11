@@ -88,23 +88,23 @@ login_manager = LoginManager()
 login_manager.login_view = 'login'
 login_manager.init_app(app)
 
-GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID')
-GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET')
-if not (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET):
-    raise RuntimeError('Google OAuth credentials not set')
+# GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID')
+# GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET')
+# if not (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET):
+#     raise RuntimeError('Google OAuth credentials not set')
 
-oauth = OAuth(app)
-oauth.register(
-    name='google',
-    client_id=GOOGLE_CLIENT_ID,
-    client_secret=GOOGLE_CLIENT_SECRET,
-    client_kwargs={'scope': 'openid email profile'},
-    # Manual endpoint configuration instead of discovery URL
-    authorize_url='https://accounts.google.com/o/oauth2/v2/auth',
-    access_token_url='https://oauth2.googleapis.com/token',
-    userinfo_endpoint='https://www.googleapis.com/oauth2/v2/userinfo',
-    jwks_uri='https://www.googleapis.com/oauth2/v3/certs'
-)
+# oauth = OAuth(app)
+# oauth.register(
+#     name='google',
+#     client_id=GOOGLE_CLIENT_ID,
+#     client_secret=GOOGLE_CLIENT_SECRET,
+#     client_kwargs={'scope': 'openid email profile'},
+#     # Manual endpoint configuration instead of discovery URL
+#     authorize_url='https://accounts.google.com/o/oauth2/v2/auth',
+#     access_token_url='https://oauth2.googleapis.com/token',
+#     userinfo_endpoint='https://www.googleapis.com/oauth2/v2/userinfo',
+#     jwks_uri='https://www.googleapis.com/oauth2/v3/certs'
+# )
 
 USERS_FILE = 'users.json'
 
