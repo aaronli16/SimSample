@@ -46,3 +46,10 @@ build/
 *.so
 *.dll
 users.json
+audio_samples/uploads/
+audio_samples/user_libraries/
+*.pkl
+*.bin
+*.wav
+*.mp3
+*.flac
