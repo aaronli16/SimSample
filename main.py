@@ -21,7 +21,44 @@ from flask_login import (
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 from authlib.integrations.flask_client import OAuth
+# Add this to the TOP of main.py, right after imports
 
+print("🚀 STARTUP: Force loading all dependencies...")
+
+# Force import ALL dependencies immediately when module loads
+try:
+    print("📦 Loading librosa...")
+    import librosa
+    # Actually use librosa to force full initialization
+    test_array = librosa.util.normalize([0.1, 0.2, 0.3])
+    print("✅ Librosa loaded successfully")
+except Exception as e:
+    print(f"❌ Librosa failed: {e}")
+
+try:
+    print("📦 Loading FAISS...")
+    import faiss
+    import numpy as np
+    # Create test index to force full FAISS init
+    test_index = faiss.IndexFlatL2(6)
+    test_data = np.random.random((5, 6)).astype('float32')
+    test_index.add(test_data)
+    print("✅ FAISS loaded successfully")
+except Exception as e:
+    print(f"❌ FAISS failed: {e}")
+
+try:
+    print("📦 Loading audio processing...")
+    from utils import audio_processing
+    # Test a function to ensure module is ready
+    _ = audio_processing._require_module
+    print("✅ Audio processing loaded successfully")
+except Exception as e:
+    print(f"❌ Audio processing failed: {e}")
+
+print("🎉 STARTUP: All dependencies loaded!")
+
+# Continue with your existing Flask app code...
 load_dotenv()
 
 SECRET_KEY = os.environ.get('SECRET_KEY')
@@ -88,23 +125,23 @@ login_manager = LoginManager()
 login_manager.login_view = 'login'
 login_manager.init_app(app)
 
-GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID')
-GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET')
-if not (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET):
-    raise RuntimeError('Google OAuth credentials not set')
+# GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID')
+# GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET')
+# if not (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET):
+#     raise RuntimeError('Google OAuth credentials not set')
 
-oauth = OAuth(app)
-oauth.register(
-    name='google',
-    client_id=GOOGLE_CLIENT_ID,
-    client_secret=GOOGLE_CLIENT_SECRET,
-    client_kwargs={'scope': 'openid email profile'},
-    # Manual endpoint configuration instead of discovery URL
-    authorize_url='https://accounts.google.com/o/oauth2/v2/auth',
-    access_token_url='https://oauth2.googleapis.com/token',
-    userinfo_endpoint='https://www.googleapis.com/oauth2/v2/userinfo',
-    jwks_uri='https://www.googleapis.com/oauth2/v3/certs'
-)
+# oauth = OAuth(app)
+# oauth.register(
+#     name='google',
+#     client_id=GOOGLE_CLIENT_ID,
+#     client_secret=GOOGLE_CLIENT_SECRET,
+#     client_kwargs={'scope': 'openid email profile'},
+#     # Manual endpoint configuration instead of discovery URL
+#     authorize_url='https://accounts.google.com/o/oauth2/v2/auth',
+#     access_token_url='https://oauth2.googleapis.com/token',
+#     userinfo_endpoint='https://www.googleapis.com/oauth2/v2/userinfo',
+#     jwks_uri='https://www.googleapis.com/oauth2/v3/certs'
+# )
 
 USERS_FILE = 'users.json'
 
