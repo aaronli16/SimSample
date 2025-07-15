@@ -89,6 +89,18 @@ All contributions are reviewed before merging to protect the live production dep
 - **Search Speed**: Sub-second similarity queries via FAISS indexing
 - **Deployment**: Production-ready on Google Cloud Run with 99.9% uptime
 
+## 🧪 Quick Test
+
+Don't have your own samples ready?
+
+👉 [Download Test Sample Folder: https://drive.google.com/drive/folders/1iCt6Fv-9TC__pAHTsKmfwdrXWYJBKqk0?usp=sharing]
+1. Download and unzip the folder.
+2. Upload the samples into SimSample using the drag-and-drop interface.
+3. Try a similarity search with a wanted sound
+
+Don't have a sound you want to test with?
+
+Test Sound: https://drive.google.com/file/d/18qN46KlzK3BxRfWScY8Aj21UNtotJRip/view?usp=sharin
 
 
 ## 📞 Connect
