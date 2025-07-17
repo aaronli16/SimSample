@@ -444,7 +444,7 @@ const startChunkedProcessing = async () => {
     for (let batch = 0; batch < total_batches; batch++) {
       setUploadState({
         phase: 'processing',
-        message: `Processing batch ${batch + 1}/${total_batches} (${batch_size} files per batch)...`,
+        message: `Processing batch ${batch + 1}/${total_batches} (${batch_size} files per batch max)...`,
         currentChunk: batch + 1,
         totalChunks: total_batches
       });

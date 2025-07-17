@@ -2,6 +2,10 @@ from flask import (
     Flask, request, render_template, jsonify, send_from_directory,
     session, redirect, url_for
 )
+
+from utils.audio_processing import FINGERPRINT_DIMENSIONS
+from functools import wraps
+import psutil
 import os
 import uuid
 import shutil
@@ -21,8 +25,6 @@ from flask_login import (
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 from authlib.integrations.flask_client import OAuth
-# Add this to the TOP of main.py, right after imports
-
 print("🚀 STARTUP: Force loading all dependencies...")
 
 # Force import ALL dependencies immediately when module loads
@@ -40,8 +42,8 @@ try:
     import faiss
     import numpy as np
     # Create test index to force full FAISS init
-    test_index = faiss.IndexFlatL2(6)
-    test_data = np.random.random((5, 6)).astype('float32')
+    test_index = faiss.IndexFlatL2(FINGERPRINT_DIMENSIONS)
+    test_data = np.random.random((5, FINGERPRINT_DIMENSIONS)).astype('float32')
     test_index.add(test_data)
     print("✅ FAISS loaded successfully")
 except Exception as e:
@@ -57,8 +59,6 @@ except Exception as e:
     print(f"❌ Audio processing failed: {e}")
 
 print("🎉 STARTUP: All dependencies loaded!")
-
-# Continue with your existing Flask app code...
 load_dotenv()
 
 SECRET_KEY = os.environ.get('SECRET_KEY')
@@ -70,11 +70,38 @@ app.secret_key = SECRET_KEY
 app.config['MAX_CONTENT_LENGTH'] = 1024 * 1024 * 1024  # 1GB upload limit
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 # Simple health check endpoint for monitoring
+
+def get_memory_status():
+    """Get current memory status"""
+    try:
+        current_memory = psutil.Process().memory_info().rss / 1024 / 1024
+        return {
+            "current_mb": current_memory,
+            "status": "ok" if current_memory < 700 else "warning"
+        }
+    except:
+        return {"status": "unknown", "current_mb": 0}
+
+# Add this decorator before your existing routes
+def memory_guard(func):
+    """Simple memory monitoring with proper function name preservation"""
+    @wraps(func)  # This fixes the naming conflict
+    def wrapper(*args, **kwargs):
+        gc.collect()  # Cleanup before processing
+        try:
+            result = func(*args, **kwargs)
+            gc.collect()  # Cleanup after processing
+            return result
+        except Exception as e:
+            gc.collect()  # Cleanup on error
+            raise
+    return wrapper
 @app.get('/health')
 def health():
     return 'OK', 200
 
 @app.route("/api/health-detailed")
+@memory_guard
 def health_detailed():
     """Detailed health check to see what's working"""
     try:
@@ -238,6 +265,7 @@ def get_user_library_path(user_id):
     """Get the path to user's library folder"""
     return os.path.join(USER_LIBRARIES_FOLDER, user_id)
 @app.route("/api/warmup", methods=["GET", "POST"])
+@memory_guard
 def warmup():
     """Simple session warmup"""
     try:
@@ -247,6 +275,7 @@ def warmup():
         return jsonify({"error": str(e)}), 500
 # --- Authentication routes ---
 @app.route('/login', methods=['GET', 'POST'])
+@memory_guard
 def login():
     if request.method == 'POST':
         username = request.form['username']
@@ -260,6 +289,7 @@ def login():
     return render_template('login.html')
 
 @app.route('/signup', methods=['GET', 'POST'])
+@memory_guard
 def signup():
     if request.method == 'POST':
         username = request.form['username']
@@ -278,11 +308,13 @@ def signup():
     return render_template('signup.html')
 
 @app.route('/login/google')
+@memory_guard
 def login_google():
     redirect_uri = 'https://simsample-371783151021.us-central1.run.app/auth/google'
     return oauth.google.authorize_redirect(redirect_uri)
 
 @app.route('/auth/google')
+@memory_guard
 def google_authorize():
     try:
         token = oauth.google.authorize_access_token()
@@ -315,16 +347,19 @@ def google_authorize():
         return redirect(url_for('login'))
     
 @app.route('/logout')
+@memory_guard
 def logout():
     logout_user()
     return redirect(url_for('login'))
 
 @app.route("/")
+@memory_guard
 def index():
     return render_template("index.html")
 # Replace these routes in your main.py
 
 @app.route("/api/build-library", methods=["POST"])
+@memory_guard
 def build_library():
     """Handle both single and chunked library uploads"""
     user_id = get_user_session()
@@ -425,6 +460,7 @@ def build_library():
 # Replace your current process_library route with these new chunked APIs:
 
 @app.route("/api/start-processing", methods=["POST"])
+@memory_guard
 def start_processing():
     """Initialize batch processing - figure out how many batches we need"""
     try:
@@ -442,7 +478,7 @@ def start_processing():
             return jsonify({"error": "No audio files found"}), 400
 
         # Calculate batches
-        BATCH_SIZE = 20  # Process 20 files per batch
+        BATCH_SIZE = 10  # Process 20 files per batch
         total_batches = (total_files + BATCH_SIZE - 1) // BATCH_SIZE
 
         # Initialize processing state in session
@@ -476,10 +512,10 @@ def start_processing():
 
 
 @app.route("/api/process-library-batch", methods=["POST"])
+@memory_guard
 def process_library_batch():
-    """Process one batch of files"""
-    import gc
-    import time
+    """Process one batch with bulletproof error handling"""
+    import traceback
 
     try:
         user_id = get_user_session()
@@ -487,7 +523,7 @@ def process_library_batch():
         processing_state = user_data.get('processing_state')
 
         if not processing_state or not processing_state.get('processing_started'):
-            return jsonify({"error": "Processing not initialized. Call /api/start-processing first"}), 400
+            return jsonify({"error": "Processing not initialized"}), 400
 
         current_batch = processing_state['current_batch']
         total_batches = processing_state['total_batches']
@@ -495,50 +531,49 @@ def process_library_batch():
         audio_files = processing_state['audio_files']
 
         if current_batch >= total_batches:
-            return jsonify({"error": "All batches already processed"}), 400
+            return jsonify({"error": "All batches processed"}), 400
 
         # Get files for this batch
         start_idx = current_batch * batch_size
         end_idx = min(start_idx + batch_size, len(audio_files))
-        batch_files = audio_files[start_idx:end_idx]
-        batch_size_actual = len(batch_files)  # Store length for later use
+        current_batch_files = audio_files[start_idx:end_idx]
 
-        print(f"🔄 BATCH {current_batch + 1}/{total_batches}: Processing {batch_size_actual} files")
+        print(f"🔄 BATCH {current_batch + 1}/{total_batches}: Processing {len(current_batch_files)} files")
 
-        # Process this batch
+        # Process files
         batch_fingerprints = {}
-        successful_files = 0
+        success_count = 0
+        failed_list = []
 
-        for i, file_path in enumerate(batch_files):
+        for i, file_path in enumerate(current_batch_files):
             try:
-                print(f"  📄 {i + 1}/{batch_size_actual}: {os.path.basename(file_path)}")
+                print(f"  📄 {i + 1}/{len(current_batch_files)}: {os.path.basename(file_path)}")
+
+                # Check if file exists
+                if not os.path.exists(file_path):
+                    failed_list.append({"file": os.path.basename(file_path), "error": "File not found"})
+                    continue
+
+                # Generate fingerprint
                 fingerprint = audio_processing.generate_fingerprint(file_path)
 
-                if fingerprint is not None and len(fingerprint) == 6:
+                if fingerprint is not None and len(fingerprint) == FINGERPRINT_DIMENSIONS:
                     batch_fingerprints[file_path] = fingerprint
-                    successful_files += 1
+                    success_count += 1
+                    print(f"    ✅ Success")
                 else:
-                    print(f"    ⚠️ Invalid fingerprint")
-
-                # Cleanup after each file
-                del fingerprint
-                gc.collect()
+                    failed_list.append({"file": os.path.basename(file_path), "error": "Invalid fingerprint"})
 
             except Exception as e:
-                print(f"    ❌ Error processing {file_path}: {e}")
+                error_msg = f"Error processing {file_path}: {str(e)}"
+                print(f"    ❌ {error_msg}")
+                failed_list.append({"file": os.path.basename(file_path), "error": str(e)})
                 continue
 
-        # Add batch results to main database
+        # Update state
         processing_state['fingerprint_db'].update(batch_fingerprints)
-        processing_state['processed_files'] += successful_files
+        processing_state['processed_files'] += success_count
         processing_state['current_batch'] += 1
-
-        # Aggressive cleanup
-        del batch_fingerprints
-        del batch_files
-        gc.collect()
-
-        print(f"✅ BATCH {current_batch + 1} complete: {successful_files} files processed")
 
         # Calculate progress
         progress = (processing_state['current_batch'] / total_batches) * 100
@@ -547,8 +582,10 @@ def process_library_batch():
             "status": "batch_complete",
             "batch_number": current_batch + 1,
             "total_batches": total_batches,
-            "files_in_batch": batch_size_actual,
-            "successful_files": successful_files,
+            "files_in_batch": len(current_batch_files),
+            "successful_files": success_count,
+            "failed_files": len(failed_list),
+            "failed_details": failed_list[:5],
             "total_processed": processing_state['processed_files'],
             "total_files": processing_state['total_files'],
             "progress_percent": round(progress, 1),
@@ -556,14 +593,12 @@ def process_library_batch():
         })
 
     except Exception as e:
-        print(f"❌ BATCH ERROR: {e}")
-        import traceback
+        print(f"💥 BATCH ERROR: {e}")
         print(f"📋 TRACEBACK: {traceback.format_exc()}")
-        gc.collect()
         return jsonify({"error": f"Batch processing failed: {str(e)}"}), 500
 
-
 @app.route("/api/finalize-library", methods=["POST"])
+@memory_guard
 def finalize_library():
     """Build final FAISS index and complete the library"""
     import gc
@@ -631,6 +666,7 @@ def finalize_library():
 
 
 @app.route("/api/processing-status")
+@memory_guard
 def processing_status():
     """Get current processing progress"""
     user_id = get_user_session()
@@ -681,7 +717,7 @@ def build_fingerprint_database_batched(folder_path, batch_size=5):  # ← DEFAUL
                 print(f"  📄 {j+1}/{len(batch)}: {os.path.basename(file_path)}")
                 fingerprint = audio_processing.generate_fingerprint(file_path)
                 
-                if fingerprint is not None and len(fingerprint) == 6:
+                if fingerprint is not None and len(fingerprint) == FINGERPRINT_DIMENSIONS:
                     fingerprint_database[file_path] = fingerprint
                 else:
                     print(f"    ⚠️ Skipping invalid fingerprint")
@@ -705,6 +741,7 @@ def build_fingerprint_database_batched(folder_path, batch_size=5):  # ← DEFAUL
     
     return fingerprint_database
 @app.route("/api/library-status")
+@memory_guard
 def library_status():
     """Get current library status for user"""
     user_id = get_user_session()
@@ -721,6 +758,7 @@ def library_status():
     })
 
 @app.route("/api/library-stats")
+@memory_guard
 def library_stats():
     """Return statistics about the current user's library"""
     user_id = get_user_session()
@@ -733,9 +771,11 @@ def library_stats():
     stats = audio_processing.get_library_stats(fingerprint_db)
     return jsonify(stats)
 
+
 @app.route("/api/find-similar", methods=["POST"])
+@memory_guard
 def find_similar():
-    """Find similar samples in user's library"""
+    """Find similar samples with adaptive result count"""
     user_id = get_user_session()
     user_data = user_sessions.get(user_id, {})
 
@@ -743,7 +783,18 @@ def find_similar():
     if not user_data.get('library_built'):
         return jsonify({"error": "Please upload and build your sample library first"}), 400
 
-    # Ensure library is up to date on every search
+    # Check for version mismatch (6D vs 16D)
+    faiss_index = user_data.get('faiss_index')
+    if faiss_index and hasattr(faiss_index, 'd'):
+        index_dimension = faiss_index.d
+        if index_dimension == 16:
+            return jsonify({
+                "error": "Library was built with old algorithm. Please clear and rebuild your library for better accuracy.",
+                "action_required": "rebuild_library",
+                "old_version": True
+            }), 400
+
+    # Ensure library is current
     user_library_path = user_data['library_folder']
     db_path = os.path.join(user_library_path, "fingerprint_db.pkl")
     index_path = os.path.join(user_library_path, "faiss_index.bin")
@@ -759,74 +810,90 @@ def find_similar():
         names_path,
     )
 
-    # Persist in session
+    # Update session
     user_sessions[user_id]['fingerprint_db'] = fingerprint_db
     user_sessions[user_id]['faiss_index'] = faiss_index
     user_sessions[user_id]['filenames'] = filenames
 
     if "sample" not in request.files:
         return jsonify({"error": "No file part"}), 400
-    
+
     file = request.files["sample"]
     if file.filename == "":
         return jsonify({"error": "No selected file"}), 400
-    
+
     # Save uploaded sample
     filepath = os.path.join(UPLOAD_FOLDER, f"{user_id}_{file.filename}")
     file.save(filepath)
-    
-    # Generate fingerprint for uploaded sample
-    fingerprint = audio_processing.generate_fingerprint(filepath)
-    if fingerprint is None:
-        return jsonify({"error": "Could not process audio file"}), 400
-    
-    # Use user's FAISS index for search
-    matches = audio_processing.find_similar_faiss(
-        fingerprint, 
-        user_data['faiss_index'], 
-        user_data['filenames'],
-        uploaded_filename=file.filename,
-        filter_by_type=True
-    )
-    
-    # Format results
-    results = []
-    user_library_path = user_data['library_folder']
-    
-    for path, score in matches:
-        try:
-            rel_path = os.path.relpath(path, user_library_path)
-            filename = os.path.basename(path)
-            
-            sample_type = audio_processing.classify_sample_from_filename(filename)
-            bpm = audio_processing.extract_bpm_from_filename(filename)
-            key = audio_processing.extract_key_from_filename(filename)
-            
-            from urllib.parse import quote
-            encoded_path = quote(f"{user_id}/{rel_path}".replace('\\', '/'))
-            
-            results.append({
-                "path": path,
-                "filename": filename,
-                "score": float(score),
-                "url": f"/api/user-samples/{encoded_path}",
-                "type": sample_type,
-                "bpm": bpm
 
-            })
-        except Exception as e:
-            print(f"Error processing path {path}: {e}")
-            continue
-    
-    return jsonify({
-        "uploaded": file.filename,
-        "uploadedUrl": f"/api/uploads/{user_id}_{file.filename}",
-        "matches": results,
-        "libraryRefreshed": refreshed
-    })
+    try:
+        # Generate fingerprint for uploaded sample
+        fingerprint = audio_processing.generate_fingerprint(filepath)
+        if fingerprint is None:
+            return jsonify({"error": "Could not process audio file"}), 400
+
+        # LINEAR ADAPTIVE SEARCH - Perfect scaling for one-shot libraries
+        matches = audio_processing.find_similar_faiss_linear_adaptive(
+            fingerprint,
+            user_data['faiss_index'],
+            user_data['filenames'],
+            uploaded_filename=file.filename,
+            filter_by_type=True
+        )
+
+        # Format results
+        results = []
+        user_library_path = user_data['library_folder']
+        library_size = len(user_data['filenames'])
+
+        for path, score in matches:
+            try:
+                rel_path = os.path.relpath(path, user_library_path)
+                filename = os.path.basename(path)
+
+                sample_type = audio_processing.classify_sample_from_filename(filename)
+                # Removed BPM since you said it's useless for one-shots
+
+                from urllib.parse import quote
+                encoded_path = quote(f"{user_id}/{rel_path}".replace('\\', '/'))
+
+                results.append({
+                    "path": path,
+                    "filename": filename,
+                    "score": float(score),
+                    "url": f"/api/user-samples/{encoded_path}",
+                    "type": sample_type
+                    # Removed bpm and key since they're not useful for one-shots
+                })
+            except Exception as e:
+                print(f"Error processing path {path}: {e}")
+                continue
+
+        # Memory cleanup
+        del fingerprint
+        gc.collect()
+
+        return jsonify({
+            "uploaded": file.filename,
+            "uploadedUrl": f"/api/uploads/{user_id}_{file.filename}",
+            "matches": results,
+            "libraryRefreshed": refreshed,
+            "library_size": library_size,
+            "results_count": len(results),
+            "adaptive_k": True  # Let frontend know we're using adaptive results
+        })
+
+    except Exception as e:
+        gc.collect()
+        return jsonify({"error": f"Search failed: {str(e)}"}), 500
+    finally:
+        # Always cleanup the uploaded file
+
+        pass
 
 # Serve user's sample files
 @app.route("/api/user-samples/<path:filename>")
+@memory_guard
 def serve_user_sample(filename):
     """Serve audio files from user's library"""
     from urllib.parse import unquote
@@ -854,10 +921,12 @@ def serve_user_sample(filename):
 
 # Serve uploaded sample files
 @app.route("/api/uploads/<path:filename>")
+@memory_guard
 def serve_uploaded(filename):
     return send_from_directory(UPLOAD_FOLDER, filename)
 
 @app.route("/api/clear-library", methods=["POST"])
+@memory_guard
 def clear_library():
     """Clear user's current library"""
     user_id = get_user_session()
